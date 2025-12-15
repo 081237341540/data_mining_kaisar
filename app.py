@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -16,49 +15,71 @@ from sklearn.metrics import r2_score, mean_squared_error
 # =========================
 # CONFIG
 # =========================
-st.set_page_config(page_title="Clustering + Regression (Demo)", layout="wide")
+st.set_page_config(page_title="Clustering + Regression", layout="wide")
 st.title("Hasil Processing + Prediksi")
-st.caption("Tampilkan ringkasan clustering dan form input untuk prediksi cluster dan target numerik.")
+st.caption("Dataset di root repo: data_with_cluster.csv")
 
 
 # =========================
-# LOAD DATA (auto cari)
+# LOAD DATASET (ROOT ONLY)
 # =========================
-def find_dataset():
-    for p in ["data/train.csv", "train.csv", "data/dataset.csv", "dataset.csv"]:
-        if os.path.exists(p):
-            return p
-    return None
-
-path = find_dataset()
-if path is None:
-    st.error("Dataset tidak ditemukan. Pastikan ada train.csv di root atau data/train.csv.")
+try:
+    df_raw = pd.read_csv("data_with_cluster.csv")
+except Exception as e:
+    st.error("File data_with_cluster.csv tidak ditemukan di root repo.")
+    st.write("Detail:", e)
     st.stop()
 
-df_raw = pd.read_csv(path)
-
-# ambil numerik saja, drop NA
+# numerik saja + cleaning
 df_num = df_raw.select_dtypes(include=["int64", "float64"]).replace([np.inf, -np.inf], np.nan).dropna()
 if df_num.shape[1] < 2:
-    st.error("Kolom numerik kurang dari 2. Clustering + regression butuh minimal 2 kolom numerik.")
+    st.error("Kolom numerik kurang dari 2. Minimal butuh 2 kolom numerik.")
     st.stop()
 
 num_cols = df_num.columns.tolist()
-target_col = num_cols[-1]
-X_cols = [c for c in num_cols if c != target_col]
-
 
 # =========================
-# SIDEBAR SETTING (minimal)
+# SIDEBAR SETTINGS
 # =========================
 st.sidebar.header("Pengaturan")
 k = st.sidebar.slider("Jumlah cluster (K)", 2, 10, 3)
 test_size = st.sidebar.slider("Test size regression", 0.1, 0.4, 0.2, 0.05)
 seed = st.sidebar.number_input("Random state", value=42, step=1)
 
+# pilih target regression dari kolom numerik (biar fleksibel)
+exclude_cols = {"cluster", "cluster_pred", "prediction", "predicted_target"}
+target_candidates = [c for c in num_cols if c.lower() not in exclude_cols]
+
+if len(target_candidates) < 2:
+    st.error("Kandidat target kurang. Pastikan ada minimal 2 kolom numerik selain kolom cluster/prediksi.")
+    st.stop()
+
+target_col = st.sidebar.selectbox("Pilih target regression", target_candidates, index=len(target_candidates) - 1)
+X_cols = [c for c in num_cols if (c != target_col) and (c.lower() not in exclude_cols)]
+
+if len(X_cols) < 1:
+    st.error("Fitur (X) kosong. Pilih target lain.")
+    st.stop()
+
 
 # =========================
-# TRAIN (di belakang layar)
+# PREVIEW
+# =========================
+st.subheader("Dataset")
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.metric("Baris (setelah cleaning)", df_num.shape[0])
+with c2:
+    st.metric("Fitur (X)", len(X_cols))
+with c3:
+    st.metric("Target (y)", target_col)
+
+with st.expander("Lihat preview data"):
+    st.dataframe(df_raw.head(20), use_container_width=True)
+
+
+# =========================
+# TRAIN (behind the scenes)
 # =========================
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(df_num[X_cols])
@@ -66,10 +87,12 @@ X_scaled = scaler.fit_transform(df_num[X_cols])
 kmeans = KMeans(n_clusters=int(k), random_state=int(seed), n_init=10)
 labels = kmeans.fit_predict(X_scaled)
 
-# regression
 X = df_num[X_cols].copy()
 y = df_num[target_col].copy()
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=float(test_size), random_state=int(seed))
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=float(test_size), random_state=int(seed)
+)
 
 reg = RandomForestRegressor(n_estimators=200, random_state=int(seed))
 reg.fit(X_train, y_train)
@@ -82,15 +105,7 @@ rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
 # =========================
 # UI: HASIL PROCESSING
 # =========================
-st.header("1) Hasil Processing (Ringkasan)")
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("Jumlah data (setelah cleaning)", df_num.shape[0])
-with c2:
-    st.metric("Jumlah fitur (X)", len(X_cols))
-with c3:
-    st.metric("Target regression", target_col)
+st.header("1) Hasil Processing")
 
 st.subheader("Ringkasan Cluster")
 colA, colB = st.columns([1, 2])
@@ -101,8 +116,8 @@ with colA:
 
 with colB:
     df_tmp = df_num.copy()
-    df_tmp["cluster"] = labels
-    profile = df_tmp.groupby("cluster")[X_cols].mean(numeric_only=True)
+    df_tmp["cluster_pred"] = labels
+    profile = df_tmp.groupby("cluster_pred")[X_cols].mean(numeric_only=True)
     st.dataframe(profile, use_container_width=True)
 
 st.subheader("Visualisasi Clustering (PCA 2D)")
@@ -130,7 +145,7 @@ with m2:
 # =========================
 st.header("2) Input untuk Prediksi")
 
-st.write("Isi nilai fitur di bawah, lalu klik Prediksi. Output: cluster + prediksi target.")
+st.write("Isi nilai fitur (X). Output: cluster + prediksi target.")
 
 with st.form("predict_form"):
     ui_cols = st.columns(3)
@@ -146,11 +161,8 @@ with st.form("predict_form"):
 if submit:
     one = pd.DataFrame([inputs])
 
-    # cluster pred
     one_scaled = scaler.transform(one)
     cluster_pred = int(kmeans.predict(one_scaled)[0])
-
-    # regression pred
     pred_target = float(reg.predict(one)[0])
 
     a, b = st.columns(2)
@@ -159,7 +171,7 @@ if submit:
     with b:
         st.success(f"Prediksi {target_col}: {pred_target:.4f}")
 
-    # tampilkan posisi input di PCA
+    # posisi input pada PCA
     try:
         one_pca = pca.transform(one_scaled)
         fig2, ax2 = plt.subplots(figsize=(7, 5))
