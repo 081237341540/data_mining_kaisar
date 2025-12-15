@@ -16,7 +16,7 @@ st.title("Clustering + Regression (End-to-End)")
 # =========================
 # LOAD DATA
 # =========================
-df = pd.read_csv("train.csv")
+df = pd.read_csv("data_with_cluster.csv")
 num_cols = df.select_dtypes(include=["int64", "float64"]).columns
 df = df[num_cols].dropna()
 
